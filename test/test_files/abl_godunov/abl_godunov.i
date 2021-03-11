@@ -2,7 +2,7 @@
 #            SIMULATION STOP            #
 #.......................................#
 time.stop_time               =   22000.0     # Max (simulated) time to evolve
-time.max_step                =   -1          # Max number of time steps
+time.max_step                =   100          # Max number of time steps
 
 #¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
 #         TIME STEP COMPUTATION         #
@@ -15,8 +15,8 @@ time.cfl              =   0.95         # CFL factor
 #.......................................#
 io.KE_int = 1
 io.line_plot_int = 1
-time.plot_interval            =  500       # Steps between plot files
-time.checkpoint_interval      =  5       # Steps between checkpoint files
+time.plot_interval            =  1       # Steps between plot files
+time.checkpoint_interval      =  500       # Steps between checkpoint files
 amr.plt_tracer = 1
 
 #¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
