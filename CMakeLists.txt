@@ -1,17 +1,20 @@
 ############################ BASE ######################################
 
 cmake_minimum_required (VERSION 3.14 FATAL_ERROR)
-project(AMR-Wind CXX C Fortran)
+project(AMR-Wind CXX C)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE INTERNAL "")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
+include(amr-wind-utils)
 
 ########################## OPTIONS #####################################
 
 #General options for the project
-option(AMR_WIND_ENABLE_DOCUMENTATION "Build documentation" OFF)
-option(AMR_WIND_ENABLE_SPHINX_API_DOCS "Link Doxygen API docs to Sphinx" OFF)
-option(AMR_WIND_ENABLE_ALL_WARNINGS "Show most warnings for most compilers" OFF)
+option(AMR_WIND_ENABLE_ALL_WARNINGS "Show most warnings for most compilers" ON)
+option(AMR_WIND_ENABLE_WERROR "Treat compiler warnings as errors" OFF)
+option(AMR_WIND_ENABLE_CLANG_TIDY "Compile with clang-tidy static analysis" OFF)
+option(AMR_WIND_ENABLE_CPPCHECK "Enable cppcheck static analysis target" OFF)
 option(AMR_WIND_ENABLE_FCOMPARE "Enable building fcompare when not testing" OFF)
 
 #Enabling tests overrides the executable options
@@ -23,9 +26,16 @@ option(AMR_WIND_TEST_WITH_FCOMPARE "Check test plots against gold files" OFF)
 option(AMR_WIND_ENABLE_MPI "Enable MPI" OFF)
 option(AMR_WIND_ENABLE_OPENMP "Enable OpenMP" OFF)
 option(AMR_WIND_ENABLE_CUDA "Enable CUDA" OFF)
+option(AMR_WIND_ENABLE_HIP "Enable HIP/ROCm" OFF)
+option(AMR_WIND_ENABLE_DPCPP "Enable Intel OneAPI DPC++" OFF)
+option(AMR_WIND_ENABLE_TINY_PROFILE "Enable AMReX TinyProfile support" OFF)
 
 # Third party libraries
+option(AMR_WIND_USE_INTERNAL_AMREX "Add AMReX as subproject" ON)
+option(AMR_WIND_ENABLE_NETCDF "Enable NetCDF library" OFF)
 option(AMR_WIND_ENABLE_MASA "Enable MASA library" OFF)
+option(AMR_WIND_ENABLE_HYPRE "Enable HYPRE integration" OFF)
+option(AMR_WIND_ENABLE_OPENFAST "Enable OpenFAST integration" OFF)
 option(AMR_WIND_ENABLE_ASCENT "Enable Ascent visualization  library" OFF)
 
 #Options for C++
@@ -35,9 +45,19 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(AMR_WIND_ENABLE_CUDA)
   enable_language(CUDA)
+  # Fix issues with GPU builds
+  enable_language(Fortran)
   if(CMAKE_CUDA_COMPILER_VERSION VERSION_LESS "10.0")
     message(FATAL_ERROR "Your nvcc version is ${CMAKE_CUDA_COMPILER_VERSION} which is unsupported."
       "Please use CUDA toolkit version 10.0 or newer.")
+  endif()
+endif()
+
+if (AMR_WIND_ENABLE_HIP)
+  find_package(HIP REQUIRED)
+  if (NOT DEFINED AMD_ARCH)
+    # Set default AMD architectures (based on Tulip for now)
+    set(AMD_ARCH "gfx906,gfx908")
   endif()
 endif()
 
@@ -45,21 +65,22 @@ if(AMR_WIND_TEST_WITH_FCOMPARE)
   set(AMR_WIND_ENABLE_FCOMPARE ON)
 endif()
 
-
 if(AMR_WIND_ENABLE_ASCENT)
   # needs to happen before amrex, since data conversions
   # happen there
   if (NOT ASCENT_DIR)
     message(FATAL_ERROR "Ascent requies an explicit 'ASCENT_DIR'")
   endif()
+  set(Ascent_DIR ${ASCENT_DIR}/lib/cmake/ascent)
+  message(STATUS "USing Ascent_DIR ${Ascent_DIR}")
+endif()
+
+if (AMR_WIND_ENABLE_OPENFAST)
+  enable_language(Fortran)
 endif()
 
 ########################### AMReX #####################################
-
-set(AMREX_SUBMOD_LOCATION "${CMAKE_SOURCE_DIR}/submods/amrex")
-include(${CMAKE_SOURCE_DIR}/cmake/set_amrex_options.cmake)
-list(APPEND CMAKE_MODULE_PATH "${AMREX_SUBMOD_LOCATION}/Tools/CMake")
-add_subdirectory(${AMREX_SUBMOD_LOCATION})
+init_amrex()
 
 ########################### AMR-Wind #####################################
 
@@ -74,23 +95,36 @@ message(STATUS "CMAKE_CXX_COMPILER_ID = ${CMAKE_CXX_COMPILER_ID}")
 message(STATUS "CMAKE_CXX_COMPILER_VERSION = ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "CMAKE_BUILD_TYPE = ${CMAKE_BUILD_TYPE}")
 
-include(${CMAKE_SOURCE_DIR}/cmake/set_rpath.cmake)
+include(set_rpath)
 
 #Create target names
 set(amr_wind_lib_name "amrwind_obj")
 set(amr_wind_exe_name "amr_wind")
 set(amr_wind_unit_test_exe_name "${amr_wind_exe_name}_unit_tests")
+set(aw_api_lib "amrwind_api")
 
 #Create main target executable
 add_library(${amr_wind_lib_name} OBJECT)
+add_library(${aw_api_lib} SHARED)
 add_executable(${amr_wind_exe_name})
 
-include(${CMAKE_SOURCE_DIR}/cmake/set_compile_flags.cmake)
-include(${CMAKE_SOURCE_DIR}/cmake/amr-wind-utils.cmake)
+init_code_checks()
+if(CLANG_TIDY_EXE)
+  set_target_properties(${amr_wind_lib_name} ${aw_api_lib} ${amr_wind_exe_name}
+                        PROPERTIES CXX_CLANG_TIDY ${CLANG_TIDY_EXE})
+endif()
 
-#Keep our Fortran module files confined to a directory
-set_target_properties(${amr_wind_lib_name} PROPERTIES Fortran_MODULE_DIRECTORY
-                     "${CMAKE_BINARY_DIR}/fortran_modules/")
+include(set_compile_flags)
+
+if (AMR_WIND_ENABLE_NETCDF)
+  set(CMAKE_PREFIX_PATH ${NETCDF_DIR} ${CMAKE_PREFIX_PATH})
+  find_package(NetCDF QUIET REQUIRED)
+  if(NetCDF_FOUND)
+    message(STATUS "Found NetCDF = ${NETCDF_DIR}")
+  endif()
+  target_compile_definitions(${amr_wind_lib_name} PUBLIC AMR_WIND_USE_NETCDF)
+  target_link_libraries_system(${amr_wind_lib_name} PUBLIC NetCDF::NetCDF)
+endif()
 
 if(AMR_WIND_ENABLE_MASA)
   set(CMAKE_PREFIX_PATH ${MASA_DIR} ${CMAKE_PREFIX_PATH})
@@ -102,27 +136,42 @@ if(AMR_WIND_ENABLE_MASA)
   target_link_libraries(${amr_wind_lib_name} PUBLIC MASA::MASA)
 endif()
 
+if(AMR_WIND_ENABLE_ASCENT)
+  target_compile_definitions(${amr_wind_lib_name} PRIVATE AMR_WIND_USE_ASCENT)
+endif()
+
 #Build amr-wind and link to amrex library
+generate_version_info()
 add_subdirectory(amr-wind)
 
 if (AMR_WIND_ENABLE_CUDA)
   set(awtargets "${amr_wind_lib_name};${amr_wind_exe_name}")
   foreach(tgt IN LISTS awtargets)
-    get_target_property(AMR_WIND_SOURCES ${tgt} SOURCES)
-    list(FILTER AMR_WIND_SOURCES INCLUDE REGEX "\\.cpp")
-    set_source_files_properties(${AMR_WIND_SOURCES} PROPERTIES LANGUAGE CUDA)
+    set_cuda_build_properties(${tgt})
+    # get_target_property(AMR_WIND_SOURCES ${tgt} SOURCES)
+    # list(FILTER AMR_WIND_SOURCES INCLUDE REGEX "\\.cpp")
+    # set_source_files_properties(${AMR_WIND_SOURCES} PROPERTIES LANGUAGE CUDA)
   endforeach()
 endif()
 
 if (AMR_WIND_ENABLE_UNIT_TESTS OR AMR_WIND_ENABLE_TESTS)
   add_executable(${amr_wind_unit_test_exe_name})
+  if(CLANG_TIDY_EXE)
+    set_target_properties(${amr_wind_unit_test_exe_name}
+                          PROPERTIES CXX_CLANG_TIDY ${CLANG_TIDY_EXE})
+  endif()
   add_subdirectory("submods/googletest")
   add_subdirectory("unit_tests")
-  if (AMR_WIND_ENABLE_CUDA)
-    get_target_property(UTEST_SOURCES ${amr_wind_unit_test_exe_name} SOURCES)
-    set_source_files_properties(${UTEST_SOURCES} PROPERTIES LANGUAGE CUDA)
-  endif()
+  set_cuda_build_properties(${amr_wind_unit_test_exe_name})
+  # if (AMR_WIND_ENABLE_CUDA)
+  #   get_target_property(UTEST_SOURCES ${amr_wind_unit_test_exe_name} SOURCES)
+  #   set_source_files_properties(${UTEST_SOURCES} PROPERTIES LANGUAGE CUDA)
+  #   set_target_properties(${amr_wind_unit_test_exe_name} PROPERTIES
+  #     CUDA_SEPARABLE_COMPILATION ON)
+  # endif()
 endif()
+
+add_subdirectory(tools)
 
 if(AMR_WIND_ENABLE_TESTS)
   enable_testing()
@@ -130,13 +179,10 @@ if(AMR_WIND_ENABLE_TESTS)
   add_subdirectory(test)
 endif()
 
-if(AMR_WIND_ENABLE_DOCUMENTATION)
-   add_subdirectory(docs)
-endif()
-
 #Define what we want to be installed during a make install
 install(
   TARGETS ${amr_wind_exe_name} ${amr_wind_unit_test_exe_name}
+  ${aw_api_lib} ${amr_wind_lib_name} buildInfo${amr_wind_lib_name}
   EXPORT ${PROJECT_NAME}Targets
   RUNTIME DESTINATION bin
   ARCHIVE DESTINATION lib
@@ -147,20 +193,19 @@ install(
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
   FILES_MATCHING PATTERN "*.H")
 
-export(
-  TARGETS ${amr_wind_exe_name} ${amr_wind_unit_test_exe_name}
-  NAMESPACE ${PROJECT_NAME}::
-  FILE ${PROJECT_NAME}Targets.cmake
-  )
-
 install(
   EXPORT ${PROJECT_NAME}Targets
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME})
+  NAMESPACE ${PROJECT_NAME}::
+  DESTINATION lib/cmake/${PROJECT_NAME})
 
 configure_package_config_file(
   cmake/${PROJECT_NAME}Config.cmake.in
   ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake
-  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME})
+  INSTALL_DESTINATION lib/cmake/${PROJECT_NAME})
 install(FILES
   ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake
-  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME})
+  DESTINATION lib/cmake/${PROJECT_NAME})
+install(FILES
+  ${PROJECT_SOURCE_DIR}/cmake/FindMASA.cmake
+  ${PROJECT_SOURCE_DIR}/cmake/FindNetCDF.cmake
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/cmake/Modules)

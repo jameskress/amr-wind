@@ -2,6 +2,7 @@
 #include <fstream>
 
 #include "amr-wind/utilities/tagging/CartBoxRefinement.H"
+#include "amr-wind/CFDSim.H"
 #include "AMReX_ParmParse.H"
 
 namespace amr_wind {
@@ -60,7 +61,8 @@ amrex::BoxArray realbox_to_boxarray(
         for (int i = 0; i < AMREX_SPACEDIM; ++i) {
             amrex::Real bbox_min = amrex::max(rb.lo()[i], problo[i]);
             amrex::Real bbox_max = amrex::min(rb.hi()[i], probhi[i]);
-            amrex::Real rlo = amrex::Math::floor((bbox_min - problo[i]) / dx[i]);
+            amrex::Real rlo =
+                amrex::Math::floor((bbox_min - problo[i]) / dx[i]);
             amrex::Real rhi = amrex::Math::ceil((bbox_max - problo[i]) / dx[i]);
             lo[i] = static_cast<int>(rlo);
             hi[i] = static_cast<int>(rhi);
@@ -73,22 +75,24 @@ amrex::BoxArray realbox_to_boxarray(
 
 } // namespace
 
-void CartBoxRefinement::initialize(const amrex::AmrCore& mesh)
+CartBoxRefinement::CartBoxRefinement(CFDSim& sim) : m_mesh(sim.mesh()) {}
+
+void CartBoxRefinement::initialize(const std::string& key)
 {
     std::string defn_file = "static_refinement.txt";
     {
-        amrex::ParmParse pp("tagging");
+        amrex::ParmParse pp(key);
         pp.query("static_refinement_def", defn_file);
     }
 
     std::ifstream ifh(defn_file, std::ios::in);
-    if (!ifh.good())
-        amrex::Abort("Cannot find input file: " + defn_file);
+    if (!ifh.good()) amrex::Abort("Cannot find input file: " + defn_file);
 
-    read_inputs(mesh, ifh);
+    read_inputs(m_mesh, ifh);
 }
 
-void CartBoxRefinement::read_inputs(const amrex::AmrCore& mesh, std::istream& ifh)
+void CartBoxRefinement::read_inputs(
+    const amrex::AmrCore& mesh, std::istream& ifh)
 {
     const auto& geom = mesh.Geom();
     int max_lev = geom.size();

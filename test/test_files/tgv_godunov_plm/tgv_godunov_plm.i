@@ -19,10 +19,9 @@ io.KE_int = 1        # calculate kinetic energy
 #¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
 #               PHYSICS                 #
 #.......................................#
-incflo.gravity          = 0.  0.  0.  # Gravitational force (3D)
 incflo.density             = 1.          # Reference density 
 incflo.use_godunov      = 1
-incflo.use_ppm = 0
+incflo.godunov_type = "plm"
 transport.viscosity = 0.00009947183943
 transport.laminar_prandtl = 1.0
 turbulence.model = Laminar

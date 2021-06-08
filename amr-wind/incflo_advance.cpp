@@ -3,106 +3,121 @@
 #include "amr-wind/incflo.H"
 #include "amr-wind/core/Physics.H"
 #include "amr-wind/core/field_ops.H"
-#include "amr-wind/convection/Godunov.H"
-#include "amr-wind/convection/MOL.H"
-#include "amr-wind/convection/mac_projection.H"
 #include "amr-wind/equation_systems/PDEBase.H"
-#include "amr-wind/diffusion/diffusion.H"
 #include "amr-wind/turbulence/TurbulenceModel.H"
 #include "amr-wind/utilities/console_io.H"
+#include "amr-wind/utilities/PostProcessing.H"
+#include "amr-wind/core/field_ops.H"
 
 using namespace amrex;
 
-void incflo::Advance()
+void incflo::pre_advance_stage1()
 {
-    BL_PROFILE("amr-wind::incflo::Advance");
+    BL_PROFILE("amr-wind::incflo::pre_advance_stage1");
 
     // Compute time step size
     bool explicit_diffusion = (m_diff_type == DiffusionType::Explicit);
     ComputeDt(explicit_diffusion);
+}
 
-    if (m_constant_density) {
-        density().advance_states();
-        density().state(amr_wind::FieldState::Old).fillpatch(m_time.current_time());
-    }
+void incflo::pre_advance_stage2()
+{
+    BL_PROFILE("amr-wind::incflo::pre_advance_stage2");
+    for (auto& pp : m_sim.physics()) pp->pre_advance_work();
+}
 
-    auto& vel = icns().fields().field;
-    vel.advance_states();
-    vel.state(amr_wind::FieldState::Old).fillpatch(m_time.current_time());
-    for (auto& eqn: scalar_eqns()) {
-        auto& field = eqn->fields().field;
-        field.advance_states();
-        field.state(amr_wind::FieldState::Old).fillpatch(m_time.current_time());
-    }
+/** Advance simulation state by one timestep
+ *
+ *  Performs the following actions at a given timestep
+ *  - Compute \f$\Delta t\f$
+ *  - Advance all computational fields to new timestate in preparation for time
+ * integration
+ *  - Call pre-advance work for all registered physics modules
+ *  - For Godunov scheme, advance to new time state
+ *  - For MOL scheme, call predictor corrector steps
+ *  - Perform any post-advance work
+ *
+ *  Much of the heavy-lifting is done by incflo::ApplyPredictor and
+ *  incflo::ApplyCorrector. Please refer to the documentation of those methods
+ *  for detailed information on the various equations being solved.
+ *
+ * \callgraph
+ */
+void incflo::advance()
+{
+    BL_PROFILE("amr-wind::incflo::Advance");
 
-    for (auto& pp: m_sim.physics())
-        pp->pre_advance_work();
+    m_sim.pde_manager().advance_states();
 
     ApplyPredictor();
 
-    if (!m_use_godunov) {
-        vel.state(amr_wind::FieldState::New).fillpatch(m_time.current_time());
-        for (auto& eqn: scalar_eqns()) {
-            auto& field = eqn->fields().field;
-            field.state(amr_wind::FieldState::New).fillpatch(m_time.current_time());
-        }
-
-        ApplyCorrector();
-    }
-
-    for (auto& pp: m_sim.physics())
-        pp->post_advance_work();
-
-    if (m_verbose > 1) PrintMaxValues("end of timestep");
+    if (!m_use_godunov) ApplyCorrector();
 }
 
+// Apply predictor step
 //
-// Apply predictor:
+//  For Godunov, this completes the timestep. For MOL, this is the first part of
+//  the predictor/corrector within a timestep.
 //
-//  1. Use u = vel_old to compute
+//  <ol>
+//  <li> Use u = vel_old to compute
 //
-//      conv_u  = - u grad u
-//      conv_r  = - div( u rho  )
-//      conv_t  = - div( u trac )
-//      eta_old     = visosity at m_time.current_time()
-//      if (m_diff_type == DiffusionType::Explicit)
-//         divtau _old = div( eta ( (grad u) + (grad u)^T ) ) / rho^n
-//         rhs = u + dt * ( conv + divtau_old )
-//      else
-//         divtau_old  = 0.0
-//         rhs = u + dt * conv
+//     \code{.cpp}
+//     conv_u  = - u grad u
+//     conv_r  = - div( u rho  )
+//     conv_t  = - div( u trac )
+//     eta_old     = visosity at m_time.current_time()
+//     if (m_diff_type == DiffusionType::Explicit)
+//        divtau _old = div( eta ( (grad u) + (grad u)^T ) ) / rho^n
+//        rhs = u + dt * ( conv + divtau_old )
+//     else
+//        divtau_old  = 0.0
+//        rhs = u + dt * conv
 //
-//      eta     = eta at new_time
+//     eta     = eta at new_time
+//     \endcode
 //
-//  2. Add explicit forcing term i.e. gravity + lagged pressure gradient
+//  <li> Add explicit forcing term i.e. gravity + lagged pressure gradient
 //
-//      rhs += dt * ( g - grad(p + p0) / rho^nph )
+//     \code{.cpp}
+//     rhs += dt * ( g - grad(p + p0) / rho^nph )
+//     \endcode
 //
-//      Note that in order to add the pressure gradient terms divided by rho,
-//      we convert the velocity to momentum before adding and then convert them back.
+//  Note that in order to add the pressure gradient terms divided by rho,
+//  we convert the velocity to momentum before adding and then convert them
+//  back.
 //
-//  3. A. If (m_diff_type == DiffusionType::Implicit)
+//  <li> A. If (m_diff_type == DiffusionType::Implicit)
 //        solve implicit diffusion equation for u*
 //
-//     ( 1 - dt / rho^nph * div ( eta grad ) ) u* = u^n + dt * conv_u
-//                                                  + dt * ( g - grad(p + p0) / rho^nph )
+//  \code{.cpp}
+//  ( 1 - dt / rho^nph * div ( eta grad ) ) u* = u^n + dt * conv_u
+//                                               + dt * ( g - grad(p + p0) /
+//                                               rho^nph )
+//  \endcode
 //
-//     B. If (m_diff_type == DiffusionType::Crank-Nicolson)
-//        solve semi-implicit diffusion equation for u*
+//  B. If (m_diff_type == DiffusionType::Crank-Nicolson)
+//     solve semi-implicit diffusion equation for u*
 //
+//     \code{.cpp}
 //     ( 1 - (dt/2) / rho^nph * div ( eta_old grad ) ) u* = u^n +
 //            dt * conv_u + (dt/2) / rho * div (eta_old grad) u^n
 //          + dt * ( g - grad(p + p0) / rho^nph )
+//     \endcode
 //
-//  4. Apply projection
+//  <li> Apply projection (see incflo::ApplyProjection)
 //
 //     Add pressure gradient term back to u*:
 //
+//      \code{.cpp}
 //      u** = u* + dt * grad p / rho^nph
+//      \endcode
 //
 //     Solve Poisson equation for phi:
 //
+//     \code{.cpp}
 //     div( grad(phi) / rho^nph ) = div( u** )
+//     \endcode
 //
 //     Update pressure:
 //
@@ -111,11 +126,40 @@ void incflo::Advance()
 //     Update velocity, now divergence free
 //
 //     vel = u** - dt * grad p / rho^nph
+//  </ol>
 //
 // It is assumed that the ghost cels of the old data have been filled and
 // the old and new data are the same in valid region.
 //
-void incflo::ApplyPredictor (bool incremental_projection)
+
+/** Apply predictor step
+ *
+ *  For Godunov, this completes the timestep. For MOL, this is the first part of
+ *  the predictor/corrector within a timestep.
+ *
+ *  <ol>
+ *  <li> Solve transport equation for momentum and scalars
+ *
+ *  \f{align}
+ *  \left[1 - \kappa \frac{\Delta t}{\rho^{n+1/2}} \nabla \cdot \left( \mu
+ *  \nabla \right)\right] u^{*} &= u^n - \Delta t (u \cdot \nabla) u + (1 -
+ * \kappa) \frac{\Delta t}{\rho^n} \nabla \cdot \left( \mu^{n} \nabla\right)
+ * u^{n} + \frac{\Delta t}{\rho^{n+1/2}} \left( S_u - \nabla(p + p_0)\right) \\
+ *  \f}
+ *
+ *  where
+ *  \f{align}
+ *  \kappa = \begin{cases}
+ *  0 & \text{Explicit} \\
+ *  0.5 & \text{Crank-Nicholson} \\
+ *  1 & \text{Implicit}
+ *  \end{cases}
+ *  \f}
+ *
+ *  <li> \ref incflo::ApplyProjection "Apply projection"
+ *  </ol>
+ */
+void incflo::ApplyPredictor(bool incremental_projection)
 {
     BL_PROFILE("amr-wind::incflo::ApplyPredictor");
 
@@ -137,60 +181,61 @@ void incflo::ApplyPredictor (bool incremental_projection)
     auto& density_nph = density_new.state(amr_wind::FieldState::NPH);
 
     // *************************************************************************************
+    // Compute viscosity / diffusive coefficients
+    // *************************************************************************************
+    m_sim.turbulence_model().update_turbulent_viscosity(
+        amr_wind::FieldState::Old);
+    icns().compute_mueff(amr_wind::FieldState::Old);
+    for (auto& eqns : scalar_eqns())
+        eqns->compute_mueff(amr_wind::FieldState::Old);
+
+    // *************************************************************************************
     // Define the forcing terms to use in the Godunov prediction
     // *************************************************************************************
-    if (m_use_godunov)
-    {
+    if (m_use_godunov) {
         icns().compute_source_term(amr_wind::FieldState::Old);
-        for (auto& seqn: scalar_eqns()) {
+        for (auto& seqn : scalar_eqns()) {
             seqn->compute_source_term(amr_wind::FieldState::Old);
         }
     }
-
-    // *************************************************************************************
-    // Compute viscosity / diffusive coefficients
-    // *************************************************************************************
-    m_sim.turbulence_model().update_turbulent_viscosity(amr_wind::FieldState::Old);
-    icns().compute_mueff(amr_wind::FieldState::Old);
-    for (auto& eqns: scalar_eqns())
-        eqns->compute_mueff(amr_wind::FieldState::Old);
 
     // *************************************************************************************
     // Compute explicit viscous term
     // *************************************************************************************
     if (need_divtau()) {
         // Reuse existing buffer to avoid creating new multifabs
-        amr_wind::field_ops::copy(velocity_new, velocity_old, 0, 0, velocity_new.num_comp(), 1);
+        amr_wind::field_ops::copy(
+            velocity_new, velocity_old, 0, 0, velocity_new.num_comp(), 1);
         icns().compute_diffusion_term(amr_wind::FieldState::Old);
         if (m_use_godunov) {
             auto& velocity_forces = icns_fields.src_term;
             // only the old states are used in predictor
-            auto& divtau = m_use_godunov
-                       ? icns_fields.diff_term
-                       : icns_fields.diff_term.state(amr_wind::FieldState::Old);
+            auto& divtau =
+                m_use_godunov
+                    ? icns_fields.diff_term
+                    : icns_fields.diff_term.state(amr_wind::FieldState::Old);
 
-            amr_wind::field_ops::add(velocity_forces, divtau, 0, 0, AMREX_SPACEDIM, 0);
+            amr_wind::field_ops::add(
+                velocity_forces, divtau, 0, 0, AMREX_SPACEDIM, 0);
         }
     }
-
-
 
     // *************************************************************************************
     // Compute explicit diffusive terms
     // *************************************************************************************
     if (need_divtau()) {
-        for (auto& eqn: scalar_eqns()) {
+        for (auto& eqn : scalar_eqns()) {
             auto& field = eqn->fields().field;
             // Reuse existing buffer to avoid creating new multifabs
-            amr_wind::field_ops::copy(field, field.state(amr_wind::FieldState::Old),
-                                      0, 0, field.num_comp(), 1);
+            amr_wind::field_ops::copy(
+                field, field.state(amr_wind::FieldState::Old), 0, 0,
+                field.num_comp(), 1);
 
             eqn->compute_diffusion_term(amr_wind::FieldState::Old);
 
             if (m_use_godunov)
                 amr_wind::field_ops::add(
-                    eqn->fields().src_term,
-                    eqn->fields().diff_term, 0, 0,
+                    eqn->fields().src_term, eqn->fields().diff_term, 0, 0,
                     field.num_comp(), 0);
         }
     }
@@ -200,7 +245,7 @@ void incflo::ApplyPredictor (bool incremental_projection)
         IntVect ng(nghost_force);
         icns().fields().src_term.fillpatch(m_time.current_time(), ng);
 
-        for (auto& eqn: scalar_eqns()) {
+        for (auto& eqn : scalar_eqns()) {
             eqn->fields().src_term.fillpatch(m_time.current_time(), ng);
         }
     }
@@ -212,22 +257,21 @@ void incflo::ApplyPredictor (bool incremental_projection)
     //                     R_u^n      , R_s^n       and R_t^n
     // *************************************************************************************
     icns().compute_advection_term(amr_wind::FieldState::Old);
-    for (auto& seqn: scalar_eqns()) {
+    for (auto& seqn : scalar_eqns()) {
         seqn->compute_advection_term(amr_wind::FieldState::Old);
     }
 
     // *************************************************************************************
     // Update density first
     // *************************************************************************************
-    if (m_constant_density)
-    {
+    if (m_constant_density) {
         amr_wind::field_ops::copy(density_nph, density_old, 0, 0, 1, 1);
     }
 
     // Perform scalar update one at a time. This is to allow an updated density
     // at `n+1/2` to be computed before other scalars use it when computing
     // their source terms.
-    for (auto& eqn: scalar_eqns()) {
+    for (auto& eqn : scalar_eqns()) {
         // Compute (recompute for Godunov) the scalar forcing terms
         eqn->compute_source_term(amr_wind::FieldState::NPH);
 
@@ -237,21 +281,26 @@ void incflo::ApplyPredictor (bool incremental_projection)
         auto& field = eqn->fields().field;
         if (m_diff_type != DiffusionType::Explicit) {
             amrex::Real dt_diff = (m_diff_type == DiffusionType::Implicit)
-                ? m_time.deltaT() : 0.5 * m_time.deltaT();
+                                      ? m_time.deltaT()
+                                      : 0.5 * m_time.deltaT();
 
             // Solve diffusion eqn. and update of the scalar field
             eqn->solve(dt_diff);
+
+            // Post-processing actions after a PDE solve
         }
+        eqn->post_solve_actions();
 
         // Update scalar at n+1/2
         amr_wind::field_ops::lincomb(
-            field.state(amr_wind::FieldState::NPH),
-            0.5, field.state(amr_wind::FieldState::Old), 0,
-            0.5, field, 0, 0, field.num_comp(), 1);
+            field.state(amr_wind::FieldState::NPH), 0.5,
+            field.state(amr_wind::FieldState::Old), 0, 0.5, field, 0, 0,
+            field.num_comp(), 1);
     }
 
     // *************************************************************************************
-    // Define (or if use_godunov, re-define) the forcing terms, without the viscous terms
+    // Define (or if use_godunov, re-define) the forcing terms, without the
+    // viscous terms
     //    and using the half-time density
     // *************************************************************************************
     icns().compute_source_term(amr_wind::FieldState::New);
@@ -271,6 +320,7 @@ void incflo::ApplyPredictor (bool incremental_projection)
                            : 0.5 * m_time.deltaT();
         icns().solve(dt_diff);
     }
+    icns().post_solve_actions();
 
     // ************************************************************************************
     //
@@ -281,7 +331,6 @@ void incflo::ApplyPredictor (bool incremental_projection)
         (density_nph).vec_const_ptrs(), new_time, m_time.deltaT(),
         incremental_projection);
 }
-
 
 //
 // Apply corrector:
@@ -312,19 +361,23 @@ void incflo::ApplyPredictor (bool incremental_projection)
 //      rhs += dt * ( g - grad(p + p0) / rho )
 //
 //      Note that in order to add the pressure gradient terms divided by rho,
-//      we convert the velocity to momentum before adding and then convert them back.
+//      we convert the velocity to momentum before adding and then convert them
+//      back.
 //
 //  3. A. If (m_diff_type == DiffusionType::Implicit)
 //        solve implicit diffusion equation for u*
 //
 //     ( 1 - dt / rho * div ( eta grad ) ) u* = u^n + dt * conv_u
-//                                                  + dt * ( g - grad(p + p0) / rho )
+//                                                  + dt * ( g - grad(p + p0) /
+//                                                  rho )
 //
 //     B. If (m_diff_type == DiffusionType::Crank-Nicolson)
 //        solve semi-implicit diffusion equation for u*
 //
-//     ( 1 - (dt/2) / rho * div ( eta grad ) ) u* = u^n + dt * conv_u + (dt/2) / rho * div (eta_old grad) u^n
-//                                                      + dt * ( g - grad(p + p0) / rho )
+//     ( 1 - (dt/2) / rho * div ( eta grad ) ) u* = u^n + dt * conv_u + (dt/2) /
+//     rho * div (eta_old grad) u^n
+//                                                      + dt * ( g - grad(p +
+//                                                      p0) / rho )
 //
 //  4. Apply projection
 //
@@ -344,6 +397,30 @@ void incflo::ApplyPredictor (bool incremental_projection)
 //
 //     vel = u** - dt * grad p / rho
 //
+
+/** Corrector step for MOL scheme
+ *
+ *  <ol>
+ *  <li> Solve transport equation for momentum and scalars
+ *
+ *  \f{align}
+ *  \left[1 - \kappa \frac{\Delta t}{\rho} \nabla \cdot \left( \mu
+ *  \nabla \right)\right] u^{*} &= u^n - \Delta t C_u + (1 - \kappa)
+ * \frac{\Delta t}{\rho} \nabla \cdot \left( \mu \nabla\right) u^{n} +
+ * \frac{\Delta t}{\rho} \left( S_u - \nabla(p + p_0)\right) \\ \f}
+ *
+ *  where
+ *  \f{align}
+ *  \kappa = \begin{cases}
+ *  0 & \text{Explicit} \\
+ *  0.5 & \text{Crank-Nicholson} \\
+ *  1 & \text{Implicit}
+ *  \end{cases}
+ *  \f}
+ *
+ *  <li> \ref incflo::ApplyProjection "Apply projection"
+ *  </ol>
+ */
 void incflo::ApplyCorrector()
 {
     BL_PROFILE("amr-wind::incflo::ApplyCorrector");
@@ -360,29 +437,31 @@ void incflo::ApplyCorrector()
     auto& density_nph = density_new.state(amr_wind::FieldState::NPH);
 
     // *************************************************************************************
-    // Compute the explicit "new" advective terms R_u^(n+1,*), R_r^(n+1,*) and R_t^(n+1,*)
-    // We only reach the corrector if !m_use_godunov which means we don't use the forces
-    // in constructing the advection term
+    // Compute the explicit "new" advective terms R_u^(n+1,*), R_r^(n+1,*) and
+    // R_t^(n+1,*) We only reach the corrector if !m_use_godunov which means we
+    // don't use the forces in constructing the advection term
     // *************************************************************************************
     icns().compute_advection_term(amr_wind::FieldState::New);
-    for (auto& seqn: scalar_eqns()) {
+    for (auto& seqn : scalar_eqns()) {
         seqn->compute_advection_term(amr_wind::FieldState::New);
     }
 
     // *************************************************************************************
     // Compute viscosity / diffusive coefficients
     // *************************************************************************************
-    m_sim.turbulence_model().update_turbulent_viscosity(amr_wind::FieldState::New);
+    m_sim.turbulence_model().update_turbulent_viscosity(
+        amr_wind::FieldState::New);
     icns().compute_mueff(amr_wind::FieldState::New);
-    for (auto& eqns: scalar_eqns())
+    for (auto& eqns : scalar_eqns())
         eqns->compute_mueff(amr_wind::FieldState::New);
 
-    // Here we create divtau of the (n+1,*) state that was computed in the predictor;
+    // Here we create divtau of the (n+1,*) state that was computed in the
+    // predictor;
     //      we use this laps only if DiffusionType::Explicit
     if (m_diff_type == DiffusionType::Explicit) {
         icns().compute_diffusion_term(amr_wind::FieldState::New);
 
-        for (auto& eqns: scalar_eqns()) {
+        for (auto& eqns : scalar_eqns()) {
             eqns->compute_diffusion_term(amr_wind::FieldState::New);
         }
     }
@@ -397,7 +476,7 @@ void incflo::ApplyCorrector()
     // Perform scalar update one at a time. This is to allow an updated density
     // at `n+1/2` to be computed before other scalars use it when computing
     // their source terms.
-    for (auto& eqn: scalar_eqns()) {
+    for (auto& eqn : scalar_eqns()) {
         // Compute (recompute for Godunov) the scalar forcing terms
         // Note this is (rho * scalar) and not just scalar
         eqn->compute_source_term(amr_wind::FieldState::New);
@@ -410,21 +489,24 @@ void incflo::ApplyCorrector()
         auto& field = eqn->fields().field;
         if (m_diff_type != DiffusionType::Explicit) {
             amrex::Real dt_diff = (m_diff_type == DiffusionType::Implicit)
-                ? m_time.deltaT() : 0.5 * m_time.deltaT();
+                                      ? m_time.deltaT()
+                                      : 0.5 * m_time.deltaT();
 
             // Solve diffusion eqn. and update of the scalar field
             eqn->solve(dt_diff);
         }
+        eqn->post_solve_actions();
 
         // Update scalar at n+1/2
         amr_wind::field_ops::lincomb(
-            field.state(amr_wind::FieldState::NPH),
-            0.5, field.state(amr_wind::FieldState::Old), 0,
-            0.5, field, 0, 0, field.num_comp(), 1);
+            field.state(amr_wind::FieldState::NPH), 0.5,
+            field.state(amr_wind::FieldState::Old), 0, 0.5, field, 0, 0,
+            field.num_comp(), 1);
     }
 
     // *************************************************************************************
-    // Define the forcing terms to use in the final update (using half-time density)
+    // Define the forcing terms to use in the final update (using half-time
+    // density)
     // *************************************************************************************
     icns().compute_source_term(amr_wind::FieldState::New);
 
@@ -435,7 +517,8 @@ void incflo::ApplyCorrector()
 
     // *************************************************************************************
     //
-    // Solve diffusion equation for u* at t^{n+1} but using eta at predicted new time
+    // Solve diffusion equation for u* at t^{n+1} but using eta at predicted new
+    // time
     //
     // *************************************************************************************
 
@@ -446,11 +529,12 @@ void incflo::ApplyCorrector()
                            : 0.5 * m_time.deltaT();
         icns().solve(dt_diff);
     }
+    icns().post_solve_actions();
 
     // *************************************************************************************
     // Project velocity field, update pressure
     // *************************************************************************************
     bool incremental = false;
-    ApplyProjection((density_nph).vec_const_ptrs(),new_time, m_time.deltaT(), incremental);
-
+    ApplyProjection(
+        (density_nph).vec_const_ptrs(), new_time, m_time.deltaT(), incremental);
 }

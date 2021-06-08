@@ -11,6 +11,11 @@ namespace amr_wind {
 
 class FieldRepo;
 
+/** An integer computational field
+ *  \ingroup fields
+ *
+ *  Used to indicate masking and overset state with IBlanking
+ */
 class IntField
 {
 public:
@@ -47,9 +52,10 @@ public:
 
     void setVal(int value) noexcept;
 
-    void setVal(int value, int start_comp, int num_comp=1, int nghost=0) noexcept;
+    void setVal(
+        int value, int start_comp, int num_comp = 1, int nghost = 0) noexcept;
 
-    void setVal(const amrex::Vector<int>& values, int nghost=0) noexcept;
+    void setVal(const amrex::Vector<int>& values, int nghost = 0) noexcept;
 
 protected:
     IntField(

@@ -13,12 +13,17 @@ namespace amr_wind {
 namespace pde {
 namespace icns {
 
+/** Buoyancy term from density variations
+ *  \ingroup icns_src
+ *
+ *  \sa RayleighTaylor
+ */
 class DensityBuoyancy : public MomentumSource::Register<DensityBuoyancy>
 {
 public:
     static const std::string identifier() { return "DensityBuoyancy"; }
 
-    DensityBuoyancy(const CFDSim& sim);
+    explicit DensityBuoyancy(const CFDSim& sim);
 
     virtual ~DensityBuoyancy();
 

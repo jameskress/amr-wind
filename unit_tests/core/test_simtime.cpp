@@ -24,7 +24,6 @@ void build_simtime_params()
     pp.add("regrid_interval", 3);
     pp.add("plot_interval", 1);
     pp.add("checkpoint_interval", 2);
-
 }
 
 } // namespace
@@ -45,11 +44,11 @@ TEST_F(SimTimeTest, init)
     EXPECT_NEAR(time.max_cfl(), 0.45, tol);
 
     const double cur_cfl = 0.9;
-    const double dt_new = 2.0 * 0.45 / cur_cfl;
+    const double dt_new = 1.0; // which comes from 2.0 * 0.45 / cur_cfl;
 
     // Check that the timestep size during initialization respects the shrink
     // value
-    time.set_current_cfl(cur_cfl);
+    time.set_current_cfl(cur_cfl * 0.5, 0.0, 0.0);
     EXPECT_NEAR(time.deltaT(), 0.1 * dt_new, tol);
     const double first_dt = time.deltaT();
 
@@ -57,7 +56,8 @@ TEST_F(SimTimeTest, init)
     EXPECT_TRUE(stop_sim);
     // Check that the timestep growth is not greater than 10% of the last
     // timestep
-    time.set_current_cfl(cur_cfl);
+    time.set_current_cfl(cur_cfl * 0.5, 0.0, 0.0);
+    // cppcheck-suppress unreadVariable
     EXPECT_NEAR(time.deltaT(), 1.1 * first_dt, tol);
 }
 
@@ -72,7 +72,7 @@ TEST_F(SimTimeTest, time_loop)
     int plot_counter = 0;
     int chkpt_counter = 0;
     while (time.new_timestep()) {
-        time.set_current_cfl(2.0);
+        time.set_current_cfl(1.125, 0.0, 0.0);
         ++counter;
 
         if (time.write_plot_file()) ++plot_counter;
@@ -85,6 +85,7 @@ TEST_F(SimTimeTest, time_loop)
     EXPECT_EQ(regrid_counter, 1);
 
     EXPECT_TRUE(time.write_last_checkpoint());
+    // cppcheck-suppress unreadVariable
     EXPECT_FALSE(time.write_last_plot_file());
 }
 
@@ -103,7 +104,7 @@ TEST_F(SimTimeTest, fixed_dt_loop)
     int plot_counter = 0;
     int chkpt_counter = 0;
     while (time.new_timestep()) {
-        time.set_current_cfl(2.0);
+        time.set_current_cfl(2.0, 0.0, 0.0);
         ++counter;
 
         if (time.write_plot_file()) ++plot_counter;
@@ -116,6 +117,7 @@ TEST_F(SimTimeTest, fixed_dt_loop)
     EXPECT_EQ(regrid_counter, 3);
 
     EXPECT_FALSE(time.write_last_checkpoint());
+    // cppcheck-suppress unreadVariable
     EXPECT_FALSE(time.write_last_plot_file());
 }
 

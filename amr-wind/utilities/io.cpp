@@ -7,7 +7,9 @@
 
 using namespace amrex;
 
-namespace { const std::string level_prefix{"Level_"}; }
+namespace {
+const std::string level_prefix{"Level_"};
+}
 
 void GotoNextLine(std::istream& is)
 {
@@ -20,7 +22,8 @@ void incflo::ReadCheckpointFile()
     BL_PROFILE("amr-wind::incflo::ReadCheckpointFile()");
 
     const std::string& restart_file = m_sim.io_manager().restart_file();
-    amrex::Print() << "Restarting from checkpoint " << restart_file << std::endl;
+    amrex::Print() << "Restarting from checkpoint " << restart_file
+                   << std::endl;
 
     Real prob_lo[BL_SPACEDIM];
     Real prob_hi[BL_SPACEDIM];
@@ -42,8 +45,8 @@ void incflo::ReadCheckpointFile()
 
     std::string line, word;
 
-    // Start reading from checkpoint file 
-    
+    // Start reading from checkpoint file
+
     // Title line
     std::getline(is, line);
 
@@ -78,8 +81,7 @@ void incflo::ReadCheckpointFile()
     {
         std::istringstream lis(line);
         int i = 0;
-        while(lis >> word)
-        {
+        while (lis >> word) {
             prob_lo[i++] = std::stod(word);
         }
     }
@@ -89,8 +91,7 @@ void incflo::ReadCheckpointFile()
     {
         std::istringstream lis(line);
         int i = 0;
-        while(lis >> word)
-        {
+        while (lis >> word) {
             prob_hi[i++] = std::stod(word);
         }
     }
@@ -99,22 +100,35 @@ void incflo::ReadCheckpointFile()
     RealBox rb(prob_lo, prob_hi);
     Geometry::ResetDefaultProbDomain(rb);
     for (int lev = 0; lev <= max_level; ++lev) {
-        SetGeometry(lev, Geometry(Geom(lev).Domain(), rb, Geom(lev).CoordInt(),
-                                  Geom(lev).isPeriodic()));
+        SetGeometry(
+            lev, Geometry(
+                     Geom(lev).Domain(), rb, Geom(lev).CoordInt(),
+                     Geom(lev).isPeriodic()));
     }
 
-    for(int lev = 0; lev <= finest_level; ++lev)
-    {
+    amrex::Vector<amrex::BoxArray> ba_inp(finest_level + 1);
+    amrex::Vector<amrex::DistributionMapping> dm_inp(finest_level + 1);
+    for (int lev = 0; lev <= finest_level; ++lev) {
         // read in level 'lev' BoxArray from Header
-        BoxArray ba;
-        ba.readFrom(is);
+        ba_inp[lev].readFrom(is);
         GotoNextLine(is);
 
         // Create distribution mapping
-        DistributionMapping dm{ba, ParallelDescriptor::NProcs()};
+        dm_inp[lev].define(ba_inp[lev], ParallelDescriptor::NProcs());
+        DistributionMapping dm = dm_inp[lev];
+
+        BoxArray ba(ba_inp[lev].simplified());
+        ba.maxSize(maxGridSize(lev));
+        if (ba == ba_inp[lev]) {
+            ba = ba_inp[lev];
+        } else {
+            if ((lev == 0) || refine_grid_layout)
+                ChopGrids(lev, ba, ParallelDescriptor::NProcs());
+            dm = DistributionMapping{ba, ParallelDescriptor::NProcs()};
+        }
 
         MakeNewLevelFromScratch(lev, m_time.current_time(), ba, dm);
     }
 
-    m_sim.io_manager().read_checkpoint_fields(restart_file);
+    m_sim.io_manager().read_checkpoint_fields(restart_file, ba_inp, dm_inp);
 }

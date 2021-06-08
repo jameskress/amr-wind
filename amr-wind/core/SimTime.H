@@ -8,6 +8,7 @@
 namespace amr_wind {
 
 /** Time manager for simulations
+ *  \ingroup core
  */
 class SimTime
 {
@@ -48,11 +49,13 @@ public:
      */
     bool write_last_checkpoint();
 
-    /** Set current CFL and update timestep based on CFL
+    /** Set current CFL and update timestep based on CFL components
      *
-     *  @param cfl_unit_time `(U / dx)`, i.e., CFL assuming unit dt
      */
-    void set_current_cfl(amrex::Real cfl_unit_time);
+    void set_current_cfl(
+        const amrex::Real conv_cfl,
+        const amrex::Real diff_cfl,
+        const amrex::Real src_cfl);
 
     /** Set start time and index based on checkpoint/restart file
      *
@@ -102,6 +105,21 @@ public:
 
     AMREX_FORCE_INLINE
     bool use_force_cfl() const { return m_use_force_cfl; }
+
+    AMREX_FORCE_INLINE
+    int regrid_interval() const { return m_regrid_interval; }
+
+    AMREX_FORCE_INLINE
+    amrex::Real start_time() const { return m_start_time; }
+
+    AMREX_FORCE_INLINE
+    amrex::Real stop_time() const { return m_stop_time; }
+
+    AMREX_FORCE_INLINE
+    int start_time_index() const { return m_start_time_index; }
+
+    AMREX_FORCE_INLINE
+    int stop_time_index() const { return m_stop_time_index; }
 
     //! Read user defined options from input file
     void parse_parameters();
@@ -166,7 +184,6 @@ private:
 
     //! Flag indicating if forcing should be included in CFL calculation
     bool m_use_force_cfl{true};
-
 };
 
 } // namespace amr_wind
