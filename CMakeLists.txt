@@ -37,6 +37,8 @@ option(AMR_WIND_ENABLE_MASA "Enable MASA library" OFF)
 option(AMR_WIND_ENABLE_HYPRE "Enable HYPRE integration" OFF)
 option(AMR_WIND_ENABLE_OPENFAST "Enable OpenFAST integration" OFF)
 option(AMR_WIND_ENABLE_ASCENT "Enable Ascent visualization  library" OFF)
+option(AMR_WIND_ENABLE_FIDES "Enable Fides" OFF)
+option(AMR_WIND_ENABLE_ADIOS2 "Enable ADIOS2" OFF)
 
 #Options for C++
 set(CMAKE_CXX_STANDARD 14)
@@ -73,6 +75,29 @@ if(AMR_WIND_ENABLE_ASCENT)
   endif()
   set(Ascent_DIR ${ASCENT_DIR}/lib/cmake/ascent)
   message(STATUS "USing Ascent_DIR ${Ascent_DIR}")
+endif()
+
+if(AMR_WIND_ENABLE_FIDES)
+  if (NOT Fides_DIR)
+    message(FATAL_ERROR "FIDES requies an explicit 'FIDES_DIR'")
+  endif()
+
+  find_package(Fides REQUIRED)
+  message(STATUS "Fides found")
+  set(Fides_LIBRARIES fides)
+  message(STATUS "Fides Libraries ${Fides_LIBRARIES}")
+endif()
+
+if(AMR_WIND_ENABLE_ADIOS2)
+    if(NOT ADIOS2_DIR)
+        MESSAGE(FATAL_ERROR "ADIOS2 support needs explicit ADIOS2_DIR")
+    endif()
+
+    MESSAGE(STATUS "Looking for ADIOS2 using ADIOS2_DIR = ${ADIOS2_DIR}")
+    find_package(ADIOS2 REQUIRED)
+    if(NOT ADIOS2_FOUND)
+        message(FATAL_ERROR "ADIOS2_DIR is not a path to a valid ADIOS2 install")
+    endif()
 endif()
 
 if (AMR_WIND_ENABLE_OPENFAST)
@@ -138,6 +163,14 @@ endif()
 
 if(AMR_WIND_ENABLE_ASCENT)
   target_compile_definitions(${amr_wind_lib_name} PRIVATE AMR_WIND_USE_ASCENT)
+endif()
+
+if(AMR_WIND_ENABLE_FIDES)
+  target_compile_definitions(${amr_wind_lib_name} PRIVATE AMR_WIND_USE_FIDES)
+endif()
+
+if(AMR_WIND_ENABLE_ADIOS2)
+  target_compile_definitions(${amr_wind_lib_name} PRIVATE AMR_WIND_USE_ADIOS2)
 endif()
 
 #Build amr-wind and link to amrex library

@@ -1,0 +1,3 @@
+export LD_LIBRARY_PATH=/home/jkress/packages/visualizationPerformanceEvaluation/ascent/install-release/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/home/jkress/packages/visualizationPerformanceEvaluation/adios2/install/lib:$LD_LIBRARY_PATH
+mpirun -np 8 ./amr_wind damBreak.i
