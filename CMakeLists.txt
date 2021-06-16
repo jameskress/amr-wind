@@ -184,7 +184,7 @@ endif()
 
 if(AMR_WIND_ENABLE_OPENBLAS)
   target_compile_definitions(${amr_wind_lib_name} PRIVATE AMR_WIND_USE_OpenBLAS)
-  target_link_libraries(${amr_wind_lib_name} OpenBLAS_LIBRARIES)
+  target_link_libraries(${amr_wind_lib_name} ${OpenBLAS_LIBRARIES})
 
 #Build amr-wind and link to amrex library
 generate_version_info()
