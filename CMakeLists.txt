@@ -39,6 +39,7 @@ option(AMR_WIND_ENABLE_OPENFAST "Enable OpenFAST integration" OFF)
 option(AMR_WIND_ENABLE_ASCENT "Enable Ascent visualization  library" OFF)
 option(AMR_WIND_ENABLE_FIDES "Enable Fides" OFF)
 option(AMR_WIND_ENABLE_ADIOS2 "Enable ADIOS2" OFF)
+option(AMR_WIND_ENABLE_OPENBLAS "Enable OPENBLAS" OFF)
 
 #Options for C++
 set(CMAKE_CXX_STANDARD 14)
@@ -97,6 +98,14 @@ if(AMR_WIND_ENABLE_ADIOS2)
     find_package(ADIOS2 REQUIRED)
     if(NOT ADIOS2_FOUND)
         message(FATAL_ERROR "ADIOS2_DIR is not a path to a valid ADIOS2 install")
+    endif()
+endif()
+
+if(AMR_WIND_ENABLE_OPENBLAS)
+    MESSAGE(STATUS "Looking for openblas = ${OPENBLAS_DIR}")
+    find_package(OPENBLAS REQUIRED)
+    if(NOT OPENBLAS_FOUND)
+        message(FATAL_ERROR "OPENBLAS_DIR is not a path to a valid OPENBLAS install")
     endif()
 endif()
 
@@ -171,6 +180,10 @@ endif()
 
 if(AMR_WIND_ENABLE_ADIOS2)
   target_compile_definitions(${amr_wind_lib_name} PRIVATE AMR_WIND_USE_ADIOS2)
+endif()
+
+if(AMR_WIND_ENABLE_OPENBLAS)
+  target_compile_definitions(${amr_wind_lib_name} PRIVATE AMR_WIND_USE_OPENBLAS)
 endif()
 
 #Build amr-wind and link to amrex library
