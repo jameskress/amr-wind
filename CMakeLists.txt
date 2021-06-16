@@ -39,7 +39,7 @@ option(AMR_WIND_ENABLE_OPENFAST "Enable OpenFAST integration" OFF)
 option(AMR_WIND_ENABLE_ASCENT "Enable Ascent visualization  library" OFF)
 option(AMR_WIND_ENABLE_FIDES "Enable Fides" OFF)
 option(AMR_WIND_ENABLE_ADIOS2 "Enable ADIOS2" OFF)
-option(AMR_WIND_ENABLE_OPENBLAS "Enable OPENBLAS" OFF)
+option(AMR_WIND_ENABLE_OpenBLAS "Enable OPENBLAS" OFF)
 
 #Options for C++
 set(CMAKE_CXX_STANDARD 14)
@@ -101,11 +101,11 @@ if(AMR_WIND_ENABLE_ADIOS2)
     endif()
 endif()
 
-if(AMR_WIND_ENABLE_OPENBLAS)
-    MESSAGE(STATUS "Looking for openblas = ${OPENBLAS_DIR}")
-    find_package(OPENBLAS REQUIRED)
-    if(NOT OPENBLAS_FOUND)
-        message(FATAL_ERROR "OPENBLAS_DIR is not a path to a valid OPENBLAS install")
+if(AMR_WIND_ENABLE_OpenBLAS)
+    MESSAGE(STATUS "Looking for openblas = ${OpenBLAS_DIR}")
+    find_package(OpenBLAS REQUIRED)
+    if(NOT OpenBLAS_FOUND)
+        message(FATAL_ERROR "OpenBLAS_DIR is not a path to a valid OPENBLAS install")
     endif()
 endif()
 
@@ -185,7 +185,6 @@ endif()
 if(AMR_WIND_ENABLE_OPENBLAS)
   target_compile_definitions(${amr_wind_lib_name} PRIVATE AMR_WIND_USE_OpenBLAS)
   target_link_libraries(${amr_wind_lib_name} OpenBLAS_LIBRARIES)
-endif()
 
 #Build amr-wind and link to amrex library
 generate_version_info()
